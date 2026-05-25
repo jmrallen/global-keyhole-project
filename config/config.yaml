@@ -1,0 +1,23 @@
+# KH-9 Pipeline Order
+# Created: 2026-05-24
+
+raw_dir: ./                          # defaults to order file's directory
+
+strips:
+  - id: D3C1216-300814-011
+    cameras: [fwd, aft]
+  - id: D3C1216-300814-012
+    cameras: [fwd, aft]
+  - id: D3C1216-300814-009
+    cameras: [fwd, aft]
+
+compute:
+  match_jobs: 6                      # parallel SIFT workers (~2 GB RAM each)
+
+paths:
+  dem: /mnt/c/.../dem-adj-43.tif
+  planet: /mnt/c/.../planet_pan_full.tif
+  output_dir: /mnt/f/.../final/
+
+stages: [1, 2]
+s2-phases: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
