@@ -30,31 +30,54 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PARQUET = REPO_ROOT / "assets" / "declass3_metadata.parquet"
 DEFAULT_OUTPUT = REPO_ROOT / "docs" / "archive" / "declass3.pmtiles"
 
-# Map source-column names (as they appear in the parquet) to normalized
-# property keys the map JS expects. Keep this list small — every extra
-# property inflates the PMTiles size.
-COLUMN_MAP = {
-    "Entity ID": "entity_id",
-    "Mission": "mission",
-    "Frame Number": "frame",
-    "Camera": "camera",
-    "Acquisitio": "acq_date",  # truncated in source parquet
-    "Resolution": "resolution",
-    "Download Available": "download_avail",
-}
+# Normalized property keys the map JS expects, and the prefixes (case-insensitive)
+# we'll use to find the matching source column. Source column names in the
+# parquet are often truncated (e.g. "Acquisitio" for "Acquisition Date"), so
+# prefix-matching is more robust than exact-name matching.
+#
+# Only `entity_id` and `geometry` are required; the rest are best-effort.
+FIELDS = [
+    ("entity_id", ["entity"]),
+    ("mission", ["mission"]),
+    ("frame", ["frame"]),
+    ("camera", ["camera"]),
+    ("acq_date", ["acquisit"]),
+    ("resolution", ["resolut", "camera res"]),
+    ("download_avail", ["download"]),
+]
+
+
+def resolve_columns(src_cols: list[str]) -> dict[str, str]:
+    """Map normalized field name → actual source column name, by prefix match."""
+    lower_to_actual = {c.lower(): c for c in src_cols}
+    resolved: dict[str, str] = {}
+    for dst, prefixes in FIELDS:
+        for c_lower, c_actual in lower_to_actual.items():
+            if any(c_lower.startswith(p) for p in prefixes):
+                resolved[dst] = c_actual
+                break
+    return resolved
 
 
 def parquet_to_geojsonl(parquet_path: Path, out_path: Path) -> int:
     """Stream parquet → line-delimited GeoJSON. Returns feature count written."""
     table = pq.read_table(parquet_path)
     src_cols = table.column_names
-    missing = [c for c in COLUMN_MAP if c not in src_cols] + (
-        ["geometry"] if "geometry" not in src_cols else []
-    )
-    if missing:
-        sys.exit(f"Parquet is missing expected columns: {missing}")
 
-    # Convert to pandas once — 586k rows fits comfortably in memory.
+    if "geometry" not in src_cols:
+        sys.exit(f"Parquet is missing required 'geometry' column. Available: {src_cols}")
+
+    resolved = resolve_columns(src_cols)
+    if "entity_id" not in resolved:
+        sys.exit(
+            f"Parquet is missing a column starting with 'entity'. Available: {src_cols}"
+        )
+
+    print(f"Available columns ({len(src_cols)}): {src_cols}")
+    print("Resolved field mapping:")
+    for dst, _ in FIELDS:
+        print(f"  {dst:16s} ← {resolved.get(dst, '(not found, will skip)')}")
+
     df = table.to_pandas()
 
     written = 0
@@ -76,14 +99,12 @@ def parquet_to_geojsonl(parquet_path: Path, out_path: Path) -> int:
                 continue
 
             props = {}
-            for src, dst in COLUMN_MAP.items():
+            for dst, src in resolved.items():
                 v = row_d.get(src)
                 if v is None or (isinstance(v, float) and v != v):  # NaN
                     continue
-                # Acquisitio is a pandas Timestamp — emit ISO date for string filtering.
                 if dst == "acq_date" and hasattr(v, "isoformat"):
                     v = v.date().isoformat()
-                # Frame numbers and other numerics: keep as int/str as-is.
                 props[dst] = v if isinstance(v, (str, int, float, bool)) else str(v)
 
             feature = {

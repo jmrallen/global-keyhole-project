@@ -7,13 +7,6 @@
   <link href="https://unpkg.com/maplibre-gl@5.1.0/dist/maplibre-gl.css" rel="stylesheet" />
   <script src="https://unpkg.com/maplibre-gl@5.1.0/dist/maplibre-gl.js"></script>
   <script src="https://unpkg.com/pmtiles@4.1.0/dist/pmtiles.js"></script>
-  <script type="importmap">
-  {
-    "imports": {
-      "protomaps-themes-base": "https://unpkg.com/protomaps-themes-base@5.4.0/dist/index.js"
-    }
-  }
-  </script>
   <style>
     /* Full-bleed container — no scrolling, fill viewport under the header. */
     body, html { overflow: hidden; }
@@ -102,6 +95,12 @@
       color: #8b949e;
       font-size: 0.9rem;
       pointer-events: none;
+      text-align: center;
+      max-width: 80%;
+    }
+    #archive-loading.error {
+      color: #ff7b3d;
+      pointer-events: auto;
     }
   </style>
 {% endblock %}
@@ -148,15 +147,21 @@
     </div>
   </div>
 
-  <script type="module">
-    import { layers as protomapsLayers } from "protomaps-themes-base";
+  <script>
+    const $loading = document.getElementById("archive-loading");
+    function showError(msg) {
+      $loading.classList.add("error");
+      $loading.innerHTML = msg;
+      console.error("[archive]", msg);
+    }
+    window.addEventListener("error", (e) => {
+      showError("Script error: " + (e.message || e.error?.message || "(unknown)") +
+        "<br><small>Open DevTools console (F12) for details.</small>");
+    });
 
     // PMTiles protocol handler — lets MapLibre fetch range-requests from .pmtiles files.
     const protocol = new pmtiles.Protocol();
     maplibregl.addProtocol("pmtiles", protocol.tile);
-
-    const DECLASS_URL = "pmtiles://./declass3.pmtiles";
-    const BASEMAP_URL = "pmtiles://https://demo-bucket.protomaps.com/v4.pmtiles";
 
     const map = new maplibregl.Map({
       container: "archive-map",
@@ -166,65 +171,67 @@
       minZoom: 0,
       maxZoom: 12,
       attributionControl: { compact: true },
-      style: {
-        version: 8,
-        glyphs: "https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf",
-        sprite: "https://protomaps.github.io/basemaps-assets/sprites/v4/dark",
-        sources: {
-          protomaps: {
-            type: "vector",
-            url: BASEMAP_URL,
-            attribution: '<a href="https://protomaps.com">Protomaps</a> © <a href="https://openstreetmap.org">OSM</a>',
-          },
-          declass3: {
-            type: "vector",
-            url: DECLASS_URL,
-            attribution: "USGS Declassified Satellite Imagery (Declass 3)",
-          },
-        },
-        layers: [
-          ...protomapsLayers("protomaps", "dark", { lang: "en" }),
-          {
-            id: "declass3-fill",
-            type: "fill",
-            source: "declass3",
-            "source-layer": "declass3",
-            paint: {
-              "fill-color": "#ff7b3d",
-              "fill-opacity": [
-                "interpolate", ["linear"], ["zoom"],
-                0, 0.08,
-                3, 0.12,
-                6, 0.18,
-              ],
-            },
-          },
-          {
-            id: "declass3-line",
-            type: "line",
-            source: "declass3",
-            "source-layer": "declass3",
-            paint: {
-              "line-color": "#ff7b3d",
-              "line-width": [
-                "interpolate", ["linear"], ["zoom"],
-                0, 0.2,
-                4, 0.4,
-                8, 0.8,
-              ],
-              "line-opacity": 0.7,
-            },
-          },
-        ],
-      },
+      // OpenFreeMap dark style — free, no API key, MapLibre-native vector tiles.
+      style: "https://tiles.openfreemap.org/styles/dark",
     });
 
     map.setProjection({ type: "globe" });
     map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
     map.addControl(new maplibregl.ScaleControl({ unit: "metric" }), "bottom-left");
 
+    map.on("error", (e) => {
+      // MapLibre wraps tile-fetch errors here; only surface meaningful ones.
+      const err = e?.error;
+      if (!err) return;
+      console.warn("[archive] maplibre error:", err);
+      if (err.status === 404 || err.message?.includes("declass3.pmtiles")) {
+        showError(
+          "Could not load <code>declass3.pmtiles</code>.<br>" +
+          "<small>Build it with <code>python scripts/web/build_pmtiles.py</code> (requires tippecanoe in WSL).</small>"
+        );
+      }
+    });
+
     map.on("load", () => {
-      document.getElementById("archive-loading").style.display = "none";
+      // Add the KH frame footprints as an overlay on top of the OpenFreeMap style.
+      map.addSource("declass3", {
+        type: "vector",
+        url: "pmtiles://./declass3.pmtiles",
+        attribution: "USGS Declassified Satellite Imagery (Declass 3)",
+      });
+      map.addLayer({
+        id: "declass3-fill",
+        type: "fill",
+        source: "declass3",
+        "source-layer": "declass3",
+        paint: {
+          "fill-color": "#ff7b3d",
+          "fill-opacity": [
+            "interpolate", ["linear"], ["zoom"],
+            0, 0.10,
+            3, 0.15,
+            6, 0.22,
+          ],
+        },
+      });
+      map.addLayer({
+        id: "declass3-line",
+        type: "line",
+        source: "declass3",
+        "source-layer": "declass3",
+        paint: {
+          "line-color": "#ff7b3d",
+          "line-width": [
+            "interpolate", ["linear"], ["zoom"],
+            0, 0.2,
+            4, 0.4,
+            8, 0.8,
+          ],
+          "line-opacity": 0.7,
+        },
+      });
+
+      $loading.style.display = "none";
       populateMissionFilter();
       updateVisibleCount();
     });
