@@ -1,5 +1,6 @@
-# Local-only dev docs / reference PDFs (private to the working tree)
-/docs/
+# Internal dev notes, ASP reference PDFs, todo lists — never committed.
+# Public-facing docs live in /docs/ (MkDocs Material site).
+/admin/
 
 # Local experiments / diagnostics (never committed)
 /experiments/
@@ -15,6 +16,9 @@
 *.npz
 *.match
 *.gcp
+
+# Built map tiles — regenerated in CI from assets/declass3_metadata.parquet
+*.pmtiles
 
 # Conda/virtualenv
 .conda/

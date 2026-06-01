@@ -1,0 +1,311 @@
+{% extends "main.html" %}
+
+{# Full-bleed page: drop Material's container padding, hide sidebars, fill the viewport. #}
+
+{% block extrahead %}
+  {{ super() }}
+  <link href="https://unpkg.com/maplibre-gl@5.1.0/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@5.1.0/dist/maplibre-gl.js"></script>
+  <script src="https://unpkg.com/pmtiles@4.1.0/dist/pmtiles.js"></script>
+  <script type="importmap">
+  {
+    "imports": {
+      "protomaps-themes-base": "https://unpkg.com/protomaps-themes-base@5.4.0/dist/index.js"
+    }
+  }
+  </script>
+  <style>
+    /* Full-bleed container — no scrolling, fill viewport under the header. */
+    body, html { overflow: hidden; }
+    .md-main__inner.md-grid { max-width: none; margin: 0; }
+    .md-content { margin: 0; padding: 0; }
+    .md-content__inner { margin: 0; padding: 0; }
+    .md-content__inner::before { display: none; } /* remove top spacer */
+    .md-sidebar { display: none; }
+
+    #archive-root {
+      position: fixed;
+      top: 2.4rem;   /* Material header height */
+      left: 0;
+      right: 0;
+      bottom: 0;
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      background: #0d1117;
+      color: #e6edf3;
+    }
+    @media (max-width: 76.25em) {
+      #archive-root { top: 2.4rem; }
+    }
+
+    #archive-sidebar {
+      padding: 1rem;
+      overflow-y: auto;
+      border-right: 1px solid #21262d;
+      font-size: 0.85rem;
+    }
+    #archive-sidebar h2 {
+      margin: 0 0 0.5rem 0;
+      font-size: 1rem;
+      letter-spacing: 0.02em;
+    }
+    #archive-sidebar .filter-group {
+      margin-bottom: 1rem;
+    }
+    #archive-sidebar label {
+      display: block;
+      margin-bottom: 0.25rem;
+      color: #8b949e;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    #archive-sidebar select,
+    #archive-sidebar input[type="date"] {
+      width: 100%;
+      padding: 0.4rem;
+      background: #161b22;
+      color: #e6edf3;
+      border: 1px solid #30363d;
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 0.85rem;
+    }
+    #archive-sidebar .stat {
+      color: #8b949e;
+      font-size: 0.75rem;
+      margin-top: 0.5rem;
+    }
+    #archive-sidebar .stat strong { color: #e6edf3; }
+
+    #archive-map {
+      width: 100%;
+      height: 100%;
+      background: #0d1117;
+    }
+
+    .maplibregl-popup-content {
+      background: #161b22;
+      color: #e6edf3;
+      border: 1px solid #30363d;
+      font-family: var(--md-text-font);
+      font-size: 0.8rem;
+      padding: 0.6rem 0.8rem;
+    }
+    .maplibregl-popup-tip { display: none; }
+    .maplibregl-popup-content a { color: #ff7b3d; }
+
+    #archive-loading {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      color: #8b949e;
+      font-size: 0.9rem;
+      pointer-events: none;
+    }
+  </style>
+{% endblock %}
+
+{% block container %}
+  <div id="archive-root">
+    <aside id="archive-sidebar">
+      <h2>Image Archive</h2>
+      <p style="color: #8b949e; font-size: 0.75rem;">
+        586,076 declassified KH-9 HEXAGON frames (1971–1986). Click a footprint for metadata and a link to USGS EarthExplorer.
+      </p>
+
+      <div class="filter-group">
+        <label for="filter-mission">Mission</label>
+        <select id="filter-mission"><option value="">All missions</option></select>
+      </div>
+
+      <div class="filter-group">
+        <label for="filter-camera">Camera</label>
+        <select id="filter-camera">
+          <option value="">Both</option>
+          <option value="A">A (forward)</option>
+          <option value="B">B (aft)</option>
+        </select>
+      </div>
+
+      <div class="filter-group">
+        <label for="filter-date-min">From</label>
+        <input type="date" id="filter-date-min" min="1971-01-01" max="1986-12-31" />
+      </div>
+      <div class="filter-group">
+        <label for="filter-date-max">To</label>
+        <input type="date" id="filter-date-max" min="1971-01-01" max="1986-12-31" />
+      </div>
+
+      <div class="stat">Visible: <strong id="stat-visible">—</strong></div>
+      <div class="stat" style="margin-top: 1rem;">
+        Globe view · drag to rotate · scroll to zoom · shift-drag to tilt
+      </div>
+    </aside>
+
+    <div id="archive-map">
+      <div id="archive-loading">Loading basemap and frame footprints…</div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { layers as protomapsLayers } from "protomaps-themes-base";
+
+    // PMTiles protocol handler — lets MapLibre fetch range-requests from .pmtiles files.
+    const protocol = new pmtiles.Protocol();
+    maplibregl.addProtocol("pmtiles", protocol.tile);
+
+    const DECLASS_URL = "pmtiles://./declass3.pmtiles";
+    const BASEMAP_URL = "pmtiles://https://demo-bucket.protomaps.com/v4.pmtiles";
+
+    const map = new maplibregl.Map({
+      container: "archive-map",
+      hash: true,
+      center: [0, 20],
+      zoom: 1.2,
+      minZoom: 0,
+      maxZoom: 12,
+      attributionControl: { compact: true },
+      style: {
+        version: 8,
+        glyphs: "https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf",
+        sprite: "https://protomaps.github.io/basemaps-assets/sprites/v4/dark",
+        sources: {
+          protomaps: {
+            type: "vector",
+            url: BASEMAP_URL,
+            attribution: '<a href="https://protomaps.com">Protomaps</a> © <a href="https://openstreetmap.org">OSM</a>',
+          },
+          declass3: {
+            type: "vector",
+            url: DECLASS_URL,
+            attribution: "USGS Declassified Satellite Imagery (Declass 3)",
+          },
+        },
+        layers: [
+          ...protomapsLayers("protomaps", "dark", { lang: "en" }),
+          {
+            id: "declass3-fill",
+            type: "fill",
+            source: "declass3",
+            "source-layer": "declass3",
+            paint: {
+              "fill-color": "#ff7b3d",
+              "fill-opacity": [
+                "interpolate", ["linear"], ["zoom"],
+                0, 0.08,
+                3, 0.12,
+                6, 0.18,
+              ],
+            },
+          },
+          {
+            id: "declass3-line",
+            type: "line",
+            source: "declass3",
+            "source-layer": "declass3",
+            paint: {
+              "line-color": "#ff7b3d",
+              "line-width": [
+                "interpolate", ["linear"], ["zoom"],
+                0, 0.2,
+                4, 0.4,
+                8, 0.8,
+              ],
+              "line-opacity": 0.7,
+            },
+          },
+        ],
+      },
+    });
+
+    map.setProjection({ type: "globe" });
+    map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
+    map.addControl(new maplibregl.ScaleControl({ unit: "metric" }), "bottom-left");
+
+    map.on("load", () => {
+      document.getElementById("archive-loading").style.display = "none";
+      populateMissionFilter();
+      updateVisibleCount();
+    });
+
+    // Populate the mission dropdown from the tileset's actual values, lazily after a moveend.
+    function populateMissionFilter() {
+      const seen = new Set();
+      const fill = () => {
+        const feats = map.querySourceFeatures("declass3", { sourceLayer: "declass3" });
+        for (const f of feats) {
+          const m = f.properties?.mission;
+          if (m) seen.add(m);
+        }
+        const sel = document.getElementById("filter-mission");
+        const current = sel.value;
+        const sorted = [...seen].sort();
+        sel.innerHTML = '<option value="">All missions</option>' +
+          sorted.map((m) => `<option value="${m}">${m}</option>`).join("");
+        sel.value = current;
+      };
+      map.on("moveend", fill);
+      map.on("sourcedata", (e) => { if (e.sourceId === "declass3" && e.isSourceLoaded) fill(); });
+    }
+
+    // Click → popup with metadata and EarthExplorer link.
+    map.on("click", "declass3-fill", (e) => {
+      const f = e.features?.[0];
+      if (!f) return;
+      const p = f.properties || {};
+      const eid = p.entity_id || "?";
+      const date = p.acq_date || "?";
+      const mission = p.mission || "?";
+      const camera = p.camera || "?";
+      const res = p.resolution || "?";
+      const eeUrl = `https://earthexplorer.usgs.gov/scene/metadata/full/5e83a3eebcb1c8ea/${eid}/`;
+      new maplibregl.Popup({ closeButton: true, maxWidth: "300px" })
+        .setLngLat(e.lngLat)
+        .setHTML(`
+          <div><strong>${eid}</strong></div>
+          <div>Mission ${mission} · Camera ${camera}</div>
+          <div>Acquired ${date}</div>
+          <div>Resolution ${res}</div>
+          <div style="margin-top: 0.4rem;">
+            <a href="${eeUrl}" target="_blank" rel="noopener">USGS EarthExplorer ↗</a>
+          </div>
+        `)
+        .addTo(map);
+    });
+    map.on("mouseenter", "declass3-fill", () => { map.getCanvas().style.cursor = "pointer"; });
+    map.on("mouseleave", "declass3-fill", () => { map.getCanvas().style.cursor = ""; });
+
+    // Filters → MapLibre setFilter (zero network cost after initial load).
+    const $mission = document.getElementById("filter-mission");
+    const $camera = document.getElementById("filter-camera");
+    const $dateMin = document.getElementById("filter-date-min");
+    const $dateMax = document.getElementById("filter-date-max");
+
+    function buildFilter() {
+      const expr = ["all"];
+      if ($mission.value) expr.push(["==", ["get", "mission"], $mission.value]);
+      if ($camera.value) expr.push(["==", ["get", "camera"], $camera.value]);
+      if ($dateMin.value) expr.push([">=", ["get", "acq_date"], $dateMin.value]);
+      if ($dateMax.value) expr.push(["<=", ["get", "acq_date"], $dateMax.value]);
+      return expr.length === 1 ? null : expr;
+    }
+    function applyFilters() {
+      const f = buildFilter();
+      map.setFilter("declass3-fill", f);
+      map.setFilter("declass3-line", f);
+      updateVisibleCount();
+    }
+    function updateVisibleCount() {
+      const feats = map.queryRenderedFeatures({ layers: ["declass3-fill"] });
+      document.getElementById("stat-visible").textContent =
+        feats.length.toLocaleString() + " in view";
+    }
+    for (const el of [$mission, $camera, $dateMin, $dateMax]) {
+      el.addEventListener("change", applyFilters);
+    }
+    map.on("moveend", updateVisibleCount);
+  </script>
+{% endblock %}
+
+{% block footer %}{% endblock %}
